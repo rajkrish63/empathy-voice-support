@@ -1,10 +1,9 @@
-
 import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Send, Bot, User, AlertTriangle, Heart } from "lucide-react";
+import { Send, Bot, User, AlertTriangle, Heart, Volume2, VolumeOff, History, Play } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 interface Message {
@@ -14,6 +13,13 @@ interface Message {
   timestamp: Date;
   emotion?: "positive" | "negative" | "neutral" | "crisis";
   emotionScore?: number;
+}
+
+interface ChatSession {
+  id: string;
+  date: Date;
+  messages: Message[];
+  overallEmotion: "positive" | "negative" | "neutral";
 }
 
 const ChatInterface = () => {
@@ -28,6 +34,12 @@ const ChatInterface = () => {
   ]);
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
+  const [voiceEnabled, setVoiceEnabled] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [chatHistory, setChatHistory] = useState<ChatSession[]>([]);
+  const [apiKey, setApiKey] = useState("");
+  const [showApiKeyInput, setShowApiKeyInput] = useState(false);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
 
@@ -89,6 +101,99 @@ const ChatInterface = () => {
     return responses[Math.floor(Math.random() * responses.length)];
   };
 
+  const playTextToSpeech = async (text: string) => {
+    if (!apiKey) {
+      setShowApiKeyInput(true);
+      toast({
+        title: "ElevenLabs API Key Required",
+        description: "Please enter your ElevenLabs API key to enable voice output.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    try {
+      setIsPlaying(true);
+      const response = await fetch("https://api.elevenlabs.io/v1/text-to-speech/Aria", {
+        method: "POST",
+        headers: {
+          "Accept": "audio/mpeg",
+          "Content-Type": "application/json",
+          "xi-api-key": apiKey,
+        },
+        body: JSON.stringify({
+          text: text,
+          model_id: "eleven_multilingual_v2",
+          voice_settings: {
+            stability: 0.5,
+            similarity_boost: 0.5
+          }
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to generate speech");
+      }
+
+      const audioBlob = await response.blob();
+      const audioUrl = URL.createObjectURL(audioBlob);
+      const audio = new Audio(audioUrl);
+      
+      audio.onended = () => {
+        setIsPlaying(false);
+        URL.revokeObjectURL(audioUrl);
+      };
+      
+      await audio.play();
+    } catch (error) {
+      console.error("Text-to-speech error:", error);
+      toast({
+        title: "Voice Error",
+        description: "Failed to play voice output. Please check your API key.",
+        variant: "destructive",
+      });
+      setIsPlaying(false);
+    }
+  };
+
+  const saveCurrentSession = () => {
+    if (messages.length > 1) { // Only save if there are user messages
+      const positiveMessages = messages.filter(msg => msg.emotion === "positive").length;
+      const negativeMessages = messages.filter(msg => msg.emotion === "negative").length;
+      const overallEmotion = positiveMessages > negativeMessages ? "positive" : 
+                           negativeMessages > positiveMessages ? "negative" : "neutral";
+
+      const session: ChatSession = {
+        id: Date.now().toString(),
+        date: new Date(),
+        messages: [...messages],
+        overallEmotion
+      };
+
+      setChatHistory(prev => [session, ...prev].slice(0, 10)); // Keep last 10 sessions
+    }
+  };
+
+  const replaySession = (session: ChatSession) => {
+    setMessages(session.messages);
+    setShowHistory(false);
+    toast({
+      title: "Session Replayed",
+      description: "Previous conversation has been loaded.",
+    });
+  };
+
+  const startNewChat = () => {
+    saveCurrentSession();
+    setMessages([{
+      id: "1",
+      content: "Hello! I'm your AI mental health companion. I'm here to listen and support you. How are you feeling today?",
+      sender: "ai",
+      timestamp: new Date(),
+      emotion: "positive"
+    }]);
+  };
+
   const handleSendMessage = async () => {
     if (!input.trim()) return;
 
@@ -118,10 +223,11 @@ const ChatInterface = () => {
     }
 
     // Simulate AI response delay
-    setTimeout(() => {
+    setTimeout(async () => {
+      const aiResponseText = generateAIResponse(userMessage.content, emotion);
       const aiResponse: Message = {
         id: (Date.now() + 1).toString(),
-        content: generateAIResponse(userMessage.content, emotion),
+        content: aiResponseText,
         sender: "ai",
         timestamp: new Date(),
         emotion: "neutral"
@@ -129,6 +235,11 @@ const ChatInterface = () => {
 
       setMessages(prev => [...prev, aiResponse]);
       setIsTyping(false);
+
+      // Play voice if enabled
+      if (voiceEnabled && apiKey) {
+        await playTextToSpeech(aiResponseText);
+      }
     }, 1000 + Math.random() * 2000);
   };
 
@@ -164,14 +275,90 @@ const ChatInterface = () => {
 
   return (
     <div className="h-[calc(100vh-200px)] flex flex-col">
+      {showApiKeyInput && (
+        <Card className="mb-4 p-4 bg-blue-50 border-blue-200">
+          <h4 className="font-semibold mb-2">Enter ElevenLabs API Key</h4>
+          <div className="flex space-x-2">
+            <Input
+              type="password"
+              placeholder="Enter your ElevenLabs API key"
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              className="flex-1"
+            />
+            <Button onClick={() => setShowApiKeyInput(false)}>Save</Button>
+          </div>
+          <p className="text-xs text-gray-600 mt-2">
+            Get your API key from <a href="https://elevenlabs.io" target="_blank" className="text-blue-600">ElevenLabs</a>
+          </p>
+        </Card>
+      )}
+
+      {showHistory && (
+        <Card className="mb-4 p-4 bg-green-50 border-green-200">
+          <div className="flex justify-between items-center mb-3">
+            <h4 className="font-semibold">Chat History - Replay for Relief</h4>
+            <Button variant="ghost" size="sm" onClick={() => setShowHistory(false)}>×</Button>
+          </div>
+          <div className="space-y-2 max-h-40 overflow-y-auto">
+            {chatHistory.length === 0 ? (
+              <p className="text-gray-500 text-sm">No previous conversations yet</p>
+            ) : (
+              chatHistory.map((session) => (
+                <div
+                  key={session.id}
+                  className="flex justify-between items-center p-2 bg-white rounded border cursor-pointer hover:bg-gray-50"
+                  onClick={() => replaySession(session)}
+                >
+                  <div>
+                    <p className="text-sm font-medium">{session.date.toLocaleDateString()}</p>
+                    <p className={`text-xs ${getEmotionColor(session.overallEmotion)}`}>
+                      {session.overallEmotion} conversation
+                    </p>
+                  </div>
+                  <Play className="w-4 h-4 text-gray-400" />
+                </div>
+              ))
+            )}
+          </div>
+        </Card>
+      )}
+
       <Card className="flex-1 bg-white/60 backdrop-blur-sm border-blue-100">
         <div className="p-4 border-b border-blue-100">
           <div className="flex items-center space-x-2">
             <Bot className="w-6 h-6 text-blue-600" />
             <h3 className="text-lg font-semibold text-gray-800">AI Mental Health Companion</h3>
             <div className="flex-1" />
+            <div className="flex items-center space-x-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowHistory(!showHistory)}
+                className="flex items-center space-x-1"
+              >
+                <History className="w-4 h-4" />
+                <span className="text-xs">History</span>
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setVoiceEnabled(!voiceEnabled)}
+                className={voiceEnabled ? "text-blue-600" : ""}
+              >
+                {voiceEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeOff className="w-4 h-4" />}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={startNewChat}
+              >
+                New Chat
+              </Button>
+            </div>
             <div className="text-sm text-gray-500">
               {isTyping && "AI is typing..."}
+              {isPlaying && "🔊 Playing..."}
             </div>
           </div>
         </div>
@@ -199,14 +386,27 @@ const ChatInterface = () => {
                         <span className="text-xs opacity-70">
                           {message.timestamp.toLocaleTimeString()}
                         </span>
-                        {message.emotion && message.sender === "user" && (
-                          <div className="flex items-center space-x-1">
-                            {getEmotionIcon(message.emotion)}
-                            <span className={`text-xs ${getEmotionColor(message.emotion)}`}>
-                              {message.emotion}
-                            </span>
-                          </div>
-                        )}
+                        <div className="flex items-center space-x-2">
+                          {message.emotion && message.sender === "user" && (
+                            <div className="flex items-center space-x-1">
+                              {getEmotionIcon(message.emotion)}
+                              <span className={`text-xs ${getEmotionColor(message.emotion)}`}>
+                                {message.emotion}
+                              </span>
+                            </div>
+                          )}
+                          {message.sender === "ai" && voiceEnabled && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => playTextToSpeech(message.content)}
+                              disabled={isPlaying}
+                              className="p-1 h-auto"
+                            >
+                              <Volume2 className="w-3 h-3" />
+                            </Button>
+                          )}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -235,7 +435,7 @@ const ChatInterface = () => {
             </Button>
           </div>
           <p className="text-xs text-gray-500 mt-2">
-            All conversations are confidential and encrypted for your privacy.
+            All conversations are confidential and encrypted for your privacy. {voiceEnabled && "🔊 Voice output enabled"}
           </p>
         </div>
       </Card>
