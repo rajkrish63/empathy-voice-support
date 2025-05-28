@@ -38,8 +38,6 @@ const ChatInterface = () => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [chatHistory, setChatHistory] = useState<ChatSession[]>([]);
-  const [apiKey, setApiKey] = useState("");
-  const [showApiKeyInput, setShowApiKeyInput] = useState(false);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
 
@@ -101,58 +99,57 @@ const ChatInterface = () => {
     return responses[Math.floor(Math.random() * responses.length)];
   };
 
-  const playTextToSpeech = async (text: string) => {
-    if (!apiKey) {
-      setShowApiKeyInput(true);
-      toast({
-        title: "ElevenLabs API Key Required",
-        description: "Please enter your ElevenLabs API key to enable voice output.",
-        variant: "destructive",
-      });
-      return;
-    }
-
+  const playTextToSpeech = (text: string) => {
     try {
       setIsPlaying(true);
-      const response = await fetch("https://api.elevenlabs.io/v1/text-to-speech/Aria", {
-        method: "POST",
-        headers: {
-          "Accept": "audio/mpeg",
-          "Content-Type": "application/json",
-          "xi-api-key": apiKey,
-        },
-        body: JSON.stringify({
-          text: text,
-          model_id: "eleven_multilingual_v2",
-          voice_settings: {
-            stability: 0.5,
-            similarity_boost: 0.5
-          }
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error("Failed to generate speech");
-      }
-
-      const audioBlob = await response.blob();
-      const audioUrl = URL.createObjectURL(audioBlob);
-      const audio = new Audio(audioUrl);
       
-      audio.onended = () => {
+      // Cancel any existing speech
+      window.speechSynthesis.cancel();
+      
+      const utterance = new SpeechSynthesisUtterance(text);
+      
+      // Configure voice settings
+      utterance.rate = 0.8; // Slightly slower for better comprehension
+      utterance.pitch = 1.0;
+      utterance.volume = 0.8;
+      
+      // Try to use a female voice for more comforting tone
+      const voices = window.speechSynthesis.getVoices();
+      const femaleVoice = voices.find(voice => 
+        voice.name.toLowerCase().includes('female') || 
+        voice.name.toLowerCase().includes('woman') ||
+        voice.name.toLowerCase().includes('samantha') ||
+        voice.name.toLowerCase().includes('karen') ||
+        voice.name.toLowerCase().includes('victoria')
+      );
+      
+      if (femaleVoice) {
+        utterance.voice = femaleVoice;
+      }
+      
+      utterance.onend = () => {
         setIsPlaying(false);
-        URL.revokeObjectURL(audioUrl);
       };
       
-      await audio.play();
+      utterance.onerror = () => {
+        setIsPlaying(false);
+        toast({
+          title: "Voice Error",
+          description: "Failed to play voice output. Your browser may not support text-to-speech.",
+          variant: "destructive",
+        });
+      };
+      
+      window.speechSynthesis.speak(utterance);
+      
     } catch (error) {
       console.error("Text-to-speech error:", error);
+      setIsPlaying(false);
       toast({
-        title: "Voice Error",
-        description: "Failed to play voice output. Please check your API key.",
+        title: "Voice Error", 
+        description: "Text-to-speech is not supported in your browser.",
         variant: "destructive",
       });
-      setIsPlaying(false);
     }
   };
 
@@ -237,8 +234,8 @@ const ChatInterface = () => {
       setIsTyping(false);
 
       // Play voice if enabled
-      if (voiceEnabled && apiKey) {
-        await playTextToSpeech(aiResponseText);
+      if (voiceEnabled) {
+        playTextToSpeech(aiResponseText);
       }
     }, 1000 + Math.random() * 2000);
   };
@@ -255,6 +252,20 @@ const ChatInterface = () => {
       scrollAreaRef.current.scrollTop = scrollAreaRef.current.scrollHeight;
     }
   }, [messages]);
+
+  // Load voices when component mounts
+  useEffect(() => {
+    if ('speechSynthesis' in window) {
+      const loadVoices = () => {
+        window.speechSynthesis.getVoices();
+      };
+      
+      loadVoices();
+      if (window.speechSynthesis.onvoiceschanged !== undefined) {
+        window.speechSynthesis.onvoiceschanged = loadVoices;
+      }
+    }
+  }, []);
 
   const getEmotionColor = (emotion?: string) => {
     switch (emotion) {
@@ -273,27 +284,10 @@ const ChatInterface = () => {
     }
   };
 
+  const isVoiceSupported = 'speechSynthesis' in window;
+
   return (
     <div className="h-[calc(100vh-200px)] flex flex-col">
-      {showApiKeyInput && (
-        <Card className="mb-4 p-4 bg-blue-50 border-blue-200">
-          <h4 className="font-semibold mb-2">Enter ElevenLabs API Key</h4>
-          <div className="flex space-x-2">
-            <Input
-              type="password"
-              placeholder="Enter your ElevenLabs API key"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              className="flex-1"
-            />
-            <Button onClick={() => setShowApiKeyInput(false)}>Save</Button>
-          </div>
-          <p className="text-xs text-gray-600 mt-2">
-            Get your API key from <a href="https://elevenlabs.io" target="_blank" className="text-blue-600">ElevenLabs</a>
-          </p>
-        </Card>
-      )}
-
       {showHistory && (
         <Card className="mb-4 p-4 bg-green-50 border-green-200">
           <div className="flex justify-between items-center mb-3">
@@ -340,14 +334,17 @@ const ChatInterface = () => {
                 <History className="w-4 h-4" />
                 <span className="text-xs">History</span>
               </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setVoiceEnabled(!voiceEnabled)}
-                className={voiceEnabled ? "text-blue-600" : ""}
-              >
-                {voiceEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeOff className="w-4 h-4" />}
-              </Button>
+              {isVoiceSupported && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setVoiceEnabled(!voiceEnabled)}
+                  className={voiceEnabled ? "text-blue-600" : ""}
+                  title={voiceEnabled ? "Disable voice output" : "Enable voice output"}
+                >
+                  {voiceEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeOff className="w-4 h-4" />}
+                </Button>
+              )}
               <Button
                 variant="outline"
                 size="sm"
@@ -395,13 +392,14 @@ const ChatInterface = () => {
                               </span>
                             </div>
                           )}
-                          {message.sender === "ai" && voiceEnabled && (
+                          {message.sender === "ai" && voiceEnabled && isVoiceSupported && (
                             <Button
                               variant="ghost"
                               size="sm"
                               onClick={() => playTextToSpeech(message.content)}
                               disabled={isPlaying}
                               className="p-1 h-auto"
+                              title="Play message aloud"
                             >
                               <Volume2 className="w-3 h-3" />
                             </Button>
@@ -435,7 +433,9 @@ const ChatInterface = () => {
             </Button>
           </div>
           <p className="text-xs text-gray-500 mt-2">
-            All conversations are confidential and encrypted for your privacy. {voiceEnabled && "🔊 Voice output enabled"}
+            All conversations are confidential and encrypted for your privacy. 
+            {voiceEnabled && isVoiceSupported && " 🔊 Voice output enabled"}
+            {!isVoiceSupported && " (Voice output not supported in this browser)"}
           </p>
         </div>
       </Card>
